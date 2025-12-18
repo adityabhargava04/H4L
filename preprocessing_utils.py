@@ -25,7 +25,11 @@ def pad_lepton_columns(df, n_lep=4):
             lambda x: x[i] if len(x) > i else np.nan
         )
 
-    return df.drop(columns=["lep_pt", "lep_eta", "lep_phi", "lep_E", "lep_type"])
+        df[f"lep_charge_{i}"] = df["lep_charge"].apply(
+            lambda x: x[i] if len(x) > i else np.nan
+        )
+
+    return df.drop(columns=["lep_pt", "lep_eta", "lep_phi", "lep_E", "lep_type", "lep_charge"])
 
 
 def root_to_pandas(filename, branches=None, verbose=False):
@@ -34,10 +38,17 @@ def root_to_pandas(filename, branches=None, verbose=False):
     with lepton branches NaN-padded into flat columns.
     """
     if branches is None:
-        branches = ["eventNumber", "lep_n", "lep_pt", "lep_eta", "lep_phi", "lep_E", "lep_type", "mcWeight"]
+        branches = [
+            "eventNumber", "lep_n",
+            "lep_pt", "lep_eta", "lep_phi", "lep_E",
+            "lep_type", "lep_charge", "mcWeight"
+        ]
 
     with uproot.open(filename) as file:
-        trees = [(key, obj) for key, obj in file.items() if isinstance(obj, uproot.behaviors.TTree.TTree)]
+        trees = [
+            (key, obj) for key, obj in file.items()
+            if isinstance(obj, uproot.behaviors.TTree.TTree)
+        ]
 
         if not trees:
             raise ValueError("No TTree found")
@@ -58,7 +69,7 @@ def load_many_root_files(file_list, label=None, **kwargs):
     dfs = []
     for fname in file_list:
         df = root_to_pandas(fname, **kwargs)
-        df = df.assign(source_file=fname,sample=label)
+        df = df.assign(source_file=fname, sample=label)
         dfs.append(df)
 
     return pd.concat(dfs, axis=0, copy=False, ignore_index=True)
@@ -83,36 +94,41 @@ def classify_channel_padded(row):
 
 def compute_m4l_padded(row):
     """
-    Compute the four-lepton invariant mass (MeV) from padded columns.
+    Compute the four-lepton invariant mass (GeV) from padded columns.
     """
     pt  = np.array([row[f"lep_pt_{i}"]  for i in range(4)])
     eta = np.array([row[f"lep_eta_{i}"] for i in range(4)])
     phi = np.array([row[f"lep_phi_{i}"] for i in range(4)])
     E   = np.array([row[f"lep_E_{i}"]   for i in range(4)])
 
-    px, py, pz = pt * np.cos(phi), pt * np.sin(phi), pt * np.sinh(eta)
-    px_tot, py_tot, pz_tot = px.sum(), py.sum(), pz.sum()
+    px = pt * np.cos(phi)
+    py = pt * np.sin(phi)
+    pz = pt * np.sinh(eta)
+
+    px_tot = px.sum()
+    py_tot = py.sum()
+    pz_tot = pz.sum()
     E_tot  = E.sum()
+
     m2 = E_tot**2 - (px_tot**2 + py_tot**2 + pz_tot**2)
     return np.sqrt(max(m2, 0.0))
 
 
-def preprocess_events(df, is_mc=False, lumi_fb=10.0, total_mc_events=None):
+def preprocess_events(df, is_mc=False):
     """
     Preprocess event-level data or MC for H→4ℓ analysis
     using padded (non-jagged) lepton columns.
     """
     df = df.copy()
-    df = df[df["lep_n"] == 4]
 
     df["channel"] = df.apply(classify_channel_padded, axis=1)
+
     df["m4l"] = df.apply(compute_m4l_padded, axis=1)
-    df["m4l_GeV"] = df["m4l"] / 1000.0
+    df["m4l_GeV"] = df["m4l"] / 1000 
 
     if is_mc:
-        if total_mc_events is None:
-            raise ValueError("total_mc_events must be provided for MC normalization")
-        df["event_weight"] = df["mcWeight"] * (lumi_fb / total_mc_events)
+        # ATLAS Open Data MC already includes normalization
+        df["event_weight"] = df["mcWeight"]
     else:
         df["event_weight"] = 1.0
 
